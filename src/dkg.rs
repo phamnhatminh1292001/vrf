@@ -99,6 +99,8 @@ impl Parameters
 //
 // Maps [`PartyIndex`] to a number. Used in the calculation of Lagrange's coefficients in the Beacon 
 // Phase as there are only several valid parties after the Setup Phase    
+
+
 pub struct Party2PointMap
 {
     pub points: HashMap<PartyIndex,u32>,
@@ -127,7 +129,7 @@ impl Party2PointMap
         .into_iter()
         .map(|x| {
             let index_bn = x as u32;
-            Scalar::from_int(&index_bn)
+            Scalar::from_int(index_bn)
         })
         .collect::<Vec<Scalar>>();
         let nume=Scalar::from_int(1);
@@ -135,7 +137,9 @@ impl Party2PointMap
         for i in 1..valid.len()
         {
             nume=nume*subset[i];
-            demo=demo*(subset[i]-own_x);
+            let mut own_xc=own_x.clone();
+            own_xc.cond_neg_assign(1.into());
+            demo=demo*(subset[i]+own_xc);
         }
         demo.inv()*nume
     }
@@ -151,8 +155,8 @@ impl Party2PointMap
 pub struct MultiPartyInfo {
     key_params: Parameters,
     own_party_index: PartyIndex,
-    secret_share: SecretShare,
-    public_key: PublicKey,
+    secret_key: SecretShare,
+    public_key: Affine,
     party_to_point_map: Party2PointMap,
 }
 
@@ -160,12 +164,12 @@ pub struct MultiPartyInfo {
 impl MultiPartyInfo
 {
     // Returns the index of the participant
-    pub fn own_point(&self) -> usize {
-        self.secret_share.0
+    pub fn own_point(&self) -> u32 {
+        self.secret_key.0
     }
     // Returns the share of the participant
     pub fn own_share(&self) -> Scalar {
-        self.secret_share.1
+        self.secret_key.1
     }
 }
 
@@ -190,7 +194,7 @@ pub struct PedersenDKG{
 }
 impl PedersenDKG
 {
-    fn start(
+    fn start(self,
         param: &Parameters,
         parties: &[PartyIndex],
         own_party_index: PartyIndex,
@@ -211,7 +215,7 @@ impl PedersenDKG
         other_parties.remove(&own_party_index);
         // Generate your own secret share
         let secret_share=randomize();
-        let own_share: SecretShare=(own_party_index,secret_share);
+        let own_share: SecretShare= (self.own_share.0,secret_share);
     }
 
     fn consume(&self,current_msg_set:Vec<InMsg>) -> FinalState
@@ -219,7 +223,7 @@ impl PedersenDKG
         let share=current_msg_set;
         let mut verified=false;
         // Init the secret key variable for yourself
-        let private_share = Scalar.from_int(0);
+        let private_share = Scalar::from_int(0);
         // Verify the validity of share s_j for all other j
         for i in 1..share.len()
         {   
@@ -227,16 +231,15 @@ impl PedersenDKG
             if verified
             {
                 private_share=private_share+share[i].fvss.share.1;
-                private_share=private_share.reduce();
             }
         }
-        let public_share=ecmult_gen(self.ctx_gen,private_share);
+        let public_share=ecmult_gen(&ECMULT_GEN_CONTEXT, &private_share);
         let state=FinalState{
             multiparty_shared_info: MultiPartyInfo{
                 key_params:self.param,
                 own_party_index: self.own_party_index,
-                secret_share: (self.own_party_index,SecretKey::from(private_share)),
-                public_key: PublicKey::from(public_share),
+                secret_key: (self.own_share.0,private_share),
+                public_key: public_share,
                 party_to_point_map: Party2PointMap { points },
             }
         };
