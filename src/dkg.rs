@@ -110,25 +110,26 @@ impl Party2PointMap
 {
 // Map each valid PartyIndex to a number (valid here means that it passed the 
 // verification test)
-    pub fn map_valid_parties_to_points(&self, valid: &[PartyIndex])->Vec<usize> {
+    pub fn map_valid_parties_to_points(&self, valid: &[PartyIndex])->Vec<u32> {
         let mut qualified = Vec::new();
         let mut absent = Vec::new();
         for idx in valid {
             match self.points.get(idx) {
                 Some(point) => qualified.push(*point),
                 None => absent.push(*idx),
+           }
         }
         assert_eq!(qualified.len(), 0);
         qualified
     }
-}
+
 // Returns the corresponding Lagrange coefficient of the party 
     pub fn calculate_lagrange_multiplier(&self, valid: &[PartyIndex], own_x: Scalar)->Scalar {
         let subset = self
         .map_valid_parties_to_points(valid)
         .into_iter()
         .map(|x| {
-            let index_bn = x as u32;
+            let index_bn = x;
             Scalar::from_int(index_bn)
         })
         .collect::<Vec<Scalar>>();
@@ -258,7 +259,6 @@ pub struct FinalState {
 }
 
 // Container of `KeygenError` type
-#[derive(Debug)]
 pub struct ErrorState {
     errors: Vec<KeygenError>,
 }
