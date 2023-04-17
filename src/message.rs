@@ -14,6 +14,7 @@ pub struct InMsg {
 
 pub type SecretShare = (u32, Scalar);
 
+#[derive(Debug, Clone)]
 pub struct GeneratingPhase {
     pub vss: VerifiableSS,
     pub share: SecretShare,

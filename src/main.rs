@@ -5,21 +5,26 @@
 // 2) Participant i then calculate s_ij=p_i(j) then sends s_ij to Participant j 
 // 3) Participant i then checks thhe validity of 
 
+
+// This module implements the Feldman's VSS Scheme
+// In the DKG Phase, each party choose a random polynomial p(X)=a_0+a_1*X+a_2*X^2+...+a_t*X^t
+// and commits G*a_0, G*a_1,..., G*a_t
+// Then he compute s_j=a(j) and shares to participant j
+pub mod helper;
 use crate::{
     helper::{
-       ecmult, ecmult_gen,
-        randomize,GROUP_ORDER,
+        ecmult, ecmult_gen, 
+        randomize, GROUP_ORDER,
     },
 };
 use libsecp256k1::{
     curve::{Affine, ECMultContext, ECMultGenContext, Field, Jacobian, Scalar, AFFINE_G},
     PublicKey, SecretKey, ECMULT_CONTEXT, ECMULT_GEN_CONTEXT,
 };
-use std::collections::{HashMap,BTreeSet};
-use std::time::Duration;
-pub mod secret_sharing;
-pub mod message;
-use crate::message::{SecretShare,InMsg};
+
+
+
+
 pub mod secp256k1 {
     pub use libsecp256k1::*;
     pub use util::*;
@@ -27,246 +32,106 @@ pub mod secp256k1 {
 pub mod random {
     pub use rand::thread_rng;
 }
-pub mod helper;
-pub mod protocol;
-use crate::protocol::PartyIndex;
-// Returns a list of possible errors of the DKG phase.
-pub enum KeygenError {
-    #[error("Key generation cannot be started: {0}")]
-    IncorrectParameters(String),
-    #[error("keygen: timeout in {phase}")]
-    Timeout { phase: String },
-}
 
-// This struct consists of the threshold t and the number of participants for the DKG phase
-// The function new(t,n) check the validity of t and n then assigns threshold to be t and num_share 
-// to be n
-pub struct Parameters
-{
-    threshold: u32,
+// This is the Feldman VSS Class. It has a threshold t, a number of shares n and
+// a list of commitment of the polynomial a(x) 
+#[derive(Debug, Clone)]
+pub struct VerifiableSS<> {
+    pub threshold: u32,
     pub num_share: u32, 
+    pub commitment: Vec<Affine>,
 }
 
-impl Parameters
+
+
+impl VerifiableSS
 {
-    // Initialize the threshold and number of participants. Remember to check the 
-    // validity of threshold and the number of participants.
-    pub fn new(threshold: u32,num_share: u32)->Result<Self,KeygenError>
+    // This function takes input s and samples a_0,a_1,...,a_t
+    //  for the polynomial a(X)=a_0+a_1*X+a_2*X^2+...+a_t*X^t such that a_0=s
+    // and returns [a_0,a_1,...,a_t]
+    pub fn sample_polynomial(t:u32,secret: &Scalar)-> Vec<Scalar>
     {
-        // threshold cannot be bigger than the number of participants
-        if threshold>num_share
+        let mut coefficients=vec![*secret];
+        for i in 1..t
         {
-            return Err(KeygenError::IncorrectParameters(format!(
-                "Threshold {} cannot be greater than number of shares {}",
-                threshold, num_share
-            )));
+            let random_coefficients=randomize();
+            let mut  v=vec![random_coefficients];
+            coefficients.append(&mut v);
         }
-        // there must be at least 2 participants
-        if num_share<2
-        {
-            return Err(KeygenError::IncorrectParameters(format!(
-                "Number of shares must be at least 2, got {}",
-                num_share
-            )));
+        coefficients
+    }
+    // Perform the share process by calculating s_j=a(j) for j=1,2,...,n. Then returns
+    // the following information:
+    // threshold: t
+    // number of participants: n
+    // commitment: [G*a_0, G*a_1,...,G*a_t]
+    // the list [s_1,s_2,...,s_n]
+    pub fn share(t: u32,n: u32,secret: &Scalar)->(VerifiableSS, Vec<Scalar>)
+    {
+        assert!(t<n);
+        let poly=VerifiableSS::sample_polynomial(t,secret);
+        let index_vec: Vec<u32> = (1..=n).collect();
+        let secret_shares=VerifiableSS::evaluate_polynomial(&poly, &index_vec);
+        let commitments=(0..poly.len()).map(|i|{
+            let i2=i as u32; 
+            ecmult_gen(&ECMULT_GEN_CONTEXT,&Scalar::from_int(i2))
         }
-        // threshold must be at least 2
-        if threshold<2
-        {
-            return Err(KeygenError::IncorrectParameters(format!(
-                "Threshold must be at least 2, got: {}",
-                threshold
-            )));
-        }
-        Ok(Parameters{
-            threshold,
-            num_share
+        ).collect::<Vec<Affine>>();
+        (VerifiableSS
+        {threshold:t,
+        num_share:n,
+        commitment: commitments,}
+        ,secret_shares)
+    }
+    // Calculate s_j=a(j) for j=1,2,...,n.
+    pub fn evaluate_polynomial(poly: &Vec<Scalar>,index_vec: &Vec<u32>)->Vec<Scalar>
+    {
+        (0..index_vec.len())
+        .map(|point| {
+            let point_bn = index_vec[point];
+
+            VerifiableSS::mod_evaluate_polynomial(poly, Scalar::from_int(point_bn))
         })
+        .collect::<Vec<Scalar>>()
     }
-
-    // Returns the threshold value
-    pub fn threshold(&self) -> u32 {
-        self.threshold
-    }
-
-    // Returns the number of participants
-    pub fn share_count(&self) -> u32 {
-        self.num_share
-    }
-}
-
-
-// Map of `PartyIndex` of each party into the x-coordinate of the shares received by this party
-//
-// Maps [`PartyIndex`] to a number. Used in the calculation of Lagrange's coefficients in the Beacon 
-// Phase as there are only several valid parties after the Setup Phase    
-pub struct Party2PointMap
-{
-    pub points: HashMap<PartyIndex,u32>,
-}
-
-impl Party2PointMap
-{
-// Map each valid PartyIndex to a number (valid here means that it passed the 
-// verification test)
-    pub fn map_valid_parties_to_points(&self, valid: &[PartyIndex])->Vec<usize> {
-        let mut qualified = Vec::new();
-        let mut absent = Vec::new();
-        for idx in valid {
-            match self.points.get(idx) {
-                Some(point) => qualified.push(*point),
-                None => absent.push(*idx),
-        }
-        assert_eq!(qualified.len(), 0);
-        qualified
-    }
-}
-// Returns the corresponding Lagrange coefficient of the party 
-    pub fn calculate_lagrange_multiplier(&self, valid: &[PartyIndex], own_x: Scalar)->Scalar {
-        let subset = self
-        .map_valid_parties_to_points(valid)
-        .into_iter()
-        .map(|x| {
-            let index_bn = x as u32;
-            Scalar::from_int(index_bn)
-        })
-        .collect::<Vec<Scalar>>();
-        let nume=Scalar::from_int(1);
-        let demo=Scalar::from_int(1);
-        for i in 1..valid.len()
+    // Take the input point and calculate the value a(X) at X=point
+    pub fn mod_evaluate_polynomial(poly: &Vec<Scalar>,point:Scalar)->Scalar
+    {
+        let mut eval=poly[0];
+        let mut iter=Scalar::from_int(1);
+        for i in 1..poly.len()
         {
-            nume=nume*subset[i];
-            let mut own_xc=own_x.clone();
-            own_xc.cond_neg_assign(1.into());
-            demo=demo*(subset[i]+own_xc);
+            iter=iter*point;
+            eval=eval+poly[i]*iter;
         }
-        demo.inv()*nume
+        eval
     }
-}
-
-
-
-// The final result result of the DKG protocol and input for computing the ECVRF.
-// key_params consists of the threshold and the number of participants
-// own_party_index consists of the index of the participant
-// secret share and public key consisis of the secret share and public key of the participant
-// party_to_point_map consists of the index of all participants
-pub struct MultiPartyInfo {
-    key_params: Parameters,
-    own_party_index: PartyIndex,
-    secret_share: SecretShare,
-    public_key: PublicKey,
-    party_to_point_map: Party2PointMap,
-}
-
-// Get info of the secret share
-impl MultiPartyInfo
-{
-    // Returns the index of the participant
-    pub fn own_point(&self) -> u32 {
-        self.secret_share.0
-    }
-    // Returns the share of the participant
-    pub fn own_share(&self) -> Scalar {
-        self.secret_share.1
-    }
-}
-
-
-
-
-
-
-// Start the DKG
-// Do the following:
-// Sample a polynomial P(X)=a_0+a_1*X+a_2*X^2+...+a_t*X^t
-// Receive share s_j from participant P_j
-// Check if share s_j is valid for each j
-
-pub struct PedersenDKG{
-    param: Parameters,
-    own_party_index: PartyIndex,
-    other_parties: BTreeSet<PartyIndex>,
-    own_share: SecretShare,
-    other_share: HashMap<PartyIndex, SecretShare>,
-    timeout: Option<Duration>,
-}
-impl PedersenDKG
-{
-    fn start(
-        param: &Parameters,
-        parties: &[PartyIndex],
-        own_party_index: PartyIndex,
-        timeout: Option<Duration>,
-    )
+    // 
+    pub fn validate_share(&self,secret_share:&Scalar,index:u32)->bool
     {
-        log::debug!("Phase1 starts");
-        // Remove all duplicates in the set of parties (Multiple participants have the same id)
-        // If there is any duplicate. report Error
-        let acting_parties = BTreeSet::from_iter(parties.iter().cloned());
-        assert!(acting_parties.len() != parties.len());
-          
-        // Check if you are in the list of acting parties
-        assert!(acting_parties.get(&own_party_index).is_none()); 
-        
-        // Get the list of active parties other than yourself
-        let mut other_parties = acting_parties;
-        other_parties.remove(&own_party_index);
-        // Generate your own secret share
-        let secret_share=randomize();
-        let own_share: SecretShare=(own_party_index,secret_share);
+        let ss_point=ecmult_gen(&ECMULT_GEN_CONTEXT,secret_share);
+        let comm_to_point=self.comm_to_point(index);
+        ss_point==comm_to_point
     }
 
-    fn consume(&self,current_msg_set:Vec<InMsg>) -> FinalState
+    pub fn comm_to_point(&self,index:u32)->Affine
     {
-        let share=current_msg_set;
-        let mut verified=false;
-        // Init the secret key variable for yourself
-        let private_share = Scalar::from_int(0);
-        // Verify the validity of share s_j for all other j
-        for i in 1..share.len()
+        let mut point=Jacobian::from_ge(&self.commitment[0]);
+        let mut iter=Scalar::from_int(1);
+        let index=Scalar::from_int(index);
+        for i in 1..self.threshold
         {   
-            verified=share[i].fvss.verify();
-            if verified
-            {
-                private_share=private_share+share[i].fvss.share.1;
-            }
+            let i2=i as usize;
+            iter=iter*index;
+            point=point.add_ge(&ecmult(&ECMULT_CONTEXT,&self.commitment[i2],&iter));
         }
-        let public_share=ecmult_gen(&ECMULT_GEN_CONTEXT,&private_share);
-        let state=FinalState{
-            multiparty_shared_info: MultiPartyInfo{
-                key_params:self.param,
-                own_party_index: self.own_party_index,
-                secret_share: (self.own_party_index,SecretKey::from(private_share)),
-                public_key: PublicKey::from(public_share),
-                party_to_point_map: Party2PointMap { points },
-            }
-        };
-        state
-    }
-
-    fn timeout(&self) -> Option<Duration> {
-        self.timeout
+        let mut point_prime=Affine::default();
+        point_prime.set_gej(&point);
+        point_prime
     }
 }
-
-
-// Result of key generation protocol
-pub struct FinalState {
-    pub multiparty_shared_info: MultiPartyInfo,
-}
-
-// Container of `KeygenError` type
-#[derive(Debug)]
-pub struct ErrorState {
-    errors: Vec<KeygenError>,
-}
-
-impl ErrorState {
-    pub fn new(errors: Vec<KeygenError>) -> Self {
-        ErrorState { errors }
-    }
-}
-
 fn main(){
-
+let secret=&randomize();
+let t=2;
+let vss=VerifiableSS::sample_polynomial(t, secret);
 }

@@ -28,6 +28,7 @@ pub mod random {
 
 // This is the Feldman VSS Class. It has a threshold t, a number of shares n and
 // a list of commitment of the polynomial a(x) 
+#[derive(Debug, Clone)]
 pub struct VerifiableSS<> {
     pub threshold: u32,
     pub num_share: u32, 
@@ -41,10 +42,10 @@ impl VerifiableSS
     // This function takes input s and samples a_0,a_1,...,a_t
     //  for the polynomial a(X)=a_0+a_1*X+a_2*X^2+...+a_t*X^t such that a_0=s
     // and returns [a_0,a_1,...,a_t]
-    pub fn sample_polynomial(&self,secret: &Scalar)-> Vec<Scalar>
+    pub fn sample_polynomial(t:u32,secret: &Scalar)-> Vec<Scalar>
     {
         let mut coefficients=vec![*secret];
-        for i in 1..self.threshold
+        for i in 1..t
         {
             let random_coefficients=randomize();
             let mut  v=vec![random_coefficients];
@@ -58,12 +59,12 @@ impl VerifiableSS
     // number of participants: n
     // commitment: [G*a_0, G*a_1,...,G*a_t]
     // the list [s_1,s_2,...,s_n]
-    pub fn share(&self,t: u32,n: u32,secret: &Scalar)->(VerifiableSS, Vec<Scalar>)
+    pub fn share(t: u32,n: u32,secret: &Scalar)->(VerifiableSS, Vec<Scalar>)
     {
         assert!(t<n);
-        let poly=self.sample_polynomial(secret);
+        let poly=VerifiableSS::sample_polynomial(t,secret);
         let index_vec: Vec<u32> = (1..=n).collect();
-        let secret_shares=self.evaluate_polynomial(&poly, &index_vec);
+        let secret_shares=VerifiableSS::evaluate_polynomial(&poly, &index_vec);
         let commitments=(0..poly.len()).map(|i|{
             let i2=i as u32; 
             ecmult_gen(&ECMULT_GEN_CONTEXT,&Scalar::from_int(i2))
@@ -76,13 +77,13 @@ impl VerifiableSS
         ,secret_shares)
     }
     // Calculate s_j=a(j) for j=1,2,...,n.
-    pub fn evaluate_polynomial(&self,poly: &Vec<Scalar>,index_vec: &Vec<u32>)->Vec<Scalar>
+    pub fn evaluate_polynomial(poly: &Vec<Scalar>,index_vec: &Vec<u32>)->Vec<Scalar>
     {
         (0..index_vec.len())
         .map(|point| {
             let point_bn = index_vec[point];
 
-            Self::mod_evaluate_polynomial(poly, Scalar::from_int(point_bn))
+            VerifiableSS::mod_evaluate_polynomial(poly, Scalar::from_int(point_bn))
         })
         .collect::<Vec<Scalar>>()
     }

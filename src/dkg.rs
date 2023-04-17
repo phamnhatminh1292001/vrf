@@ -8,12 +8,12 @@
 use crate::{
     helper::{
        ecmult, ecmult_gen,
-        randomize,GROUP_ORDER,
+        randomize,
     },
 };
 use libsecp256k1::{
-    curve::{Affine, ECMultContext, ECMultGenContext, Field, Jacobian, Scalar, AFFINE_G},
-    PublicKey, SecretKey, ECMULT_CONTEXT, ECMULT_GEN_CONTEXT,
+    curve::{Affine,Scalar},
+     ECMULT_GEN_CONTEXT,
 };
 use std::collections::{HashMap,BTreeSet};
 use std::time::Duration;
@@ -30,6 +30,10 @@ pub mod random {
 pub mod helper;
 pub mod protocol;
 use crate::protocol::PartyIndex;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[allow(clippy::large_enum_variant)]
 // Returns a list of possible errors of the DKG phase.
 pub enum KeygenError {
     #[error("Key generation cannot be started: {0}")]
@@ -41,6 +45,7 @@ pub enum KeygenError {
 // This struct consists of the threshold t and the number of participants for the DKG phase
 // The function new(t,n) check the validity of t and n then assigns threshold to be t and num_share 
 // to be n
+#[derive(Clone, Copy, Debug)]
 pub struct Parameters
 {
     threshold: u32,
@@ -133,8 +138,8 @@ impl Party2PointMap
             Scalar::from_int(index_bn)
         })
         .collect::<Vec<Scalar>>();
-        let nume=Scalar::from_int(1);
-        let demo=Scalar::from_int(1);
+        let mut nume=Scalar::from_int(1);
+        let mut demo=Scalar::from_int(1);
         for i in 1..valid.len()
         {
             nume=nume*subset[i];
@@ -202,7 +207,7 @@ impl PedersenDKG
         timeout: Option<Duration>,
     )
     {
-        log::debug!("Phase1 starts");
+        log::info!("Phase1 starts");
         // Remove all duplicates in the set of parties (Multiple participants have the same id)
         // If there is any duplicate. report Error
         let acting_parties = BTreeSet::from_iter(parties.iter().cloned());
@@ -224,7 +229,7 @@ impl PedersenDKG
         let share=current_msg_set;
         let mut verified=false;
         // Init the secret key variable for yourself
-        let private_share = Scalar::from_int(0);
+        let mut private_share = Scalar::from_int(0);
         // Verify the validity of share s_j for all other j
         for i in 1..share.len()
         {   
@@ -234,7 +239,13 @@ impl PedersenDKG
                 private_share=private_share+share[i].fvss.share.1;
             }
         }
+        let points = self
+        .other_share
+        .iter()
+        .map(|(p, share_xy)| (*p, share_xy.0))
+        .collect();
         let public_share=ecmult_gen(&ECMULT_GEN_CONTEXT, &private_share);
+
         let state=FinalState{
             multiparty_shared_info: MultiPartyInfo{
                 key_params:self.param,
