@@ -1,9 +1,4 @@
-
-
-use libsecp256k1::{
-    curve::{Scalar},
-};
-
+use libsecp256k1::curve::Scalar;
 
 use crate::protocol::PartyIndex;
 use crate::secret_sharing::VerifiableSS;
@@ -21,8 +16,7 @@ pub struct GeneratingPhase {
 }
 
 impl GeneratingPhase {
-    pub fn verify(&self) -> bool
-    {
+    pub fn verify(&self) -> bool {
         let valid = self.vss.validate_share(&self.share.1, self.share.0);
         if valid {
             log::debug!("validated FVSS {:?}\n", &self);

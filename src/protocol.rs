@@ -1,21 +1,17 @@
 use core::cmp::Ordering;
 use core::fmt::{Error, Formatter};
 
-
-
-
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::fmt::{Debug, Display};
-
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq)]
 pub struct PartyIndex(pub [u8; 32]);
 
 impl PartyIndex {
     pub fn from_slice(slice: &[u8]) -> Self {
-            let mut result = [0u8; 32];
-            result.clone_from_slice(slice);
-            PartyIndex(result)
+        let mut result = [0u8; 32];
+        result.clone_from_slice(slice);
+        PartyIndex(result)
     }
 
     fn write_as_hex_str(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
